@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Moving Car</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: Arial, sans-serif;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            z-index: 100;
+        }
+        #controls {
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+            color: white;
+            z-index: 100;
+        }
+        button {
+            margin: 5px;
+            padding: 8px 16px;
+            background: rgba(50, 50, 50, 0.7);
+            color: white;
+            border: 1px solid white;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background: rgba(70, 70, 70, 0.9);
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        <h1>3D Moving Car</h1>
+        <p>A simple Three.js demo with a moving car</p>
+    </div>
+    <div id="controls">
+        <button id="forward">Forward (W)</button>
+        <button id="backward">Backward (S)</button>
+        <button id="left">Left (A)</button>
+        <button id="right">Right (D)</button>
+        <button id="reset">Reset Position</button>
+        <div style="margin-top: 10px;">
+            <input type="text" id="carName" placeholder="Enter car name" style="padding: 8px; width: 150px; border-radius: 4px; border: 1px solid #ccc;">
+            <button id="updateName">Update Name</button>
+        </div>
+    </div>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // Scene setup
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB); // Sky blue
+        
+        // Camera setup
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        camera.position.set(0, 5, 10);
+        camera.lookAt(0, 0, 0);
+        
+        // Renderer setup
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+        
+        // Texture loader
+        const textureLoader = new THREE.TextureLoader();
+        
+        // Create dynamic canvas texture for car name
+        function createTextTexture(text, width = 512, height = 128) {
+            const canvas = document.createElement('canvas');
+            canvas.width = width;
+            canvas.height = height;
+            const context = canvas.getContext('2d');
+            
+            // Clear canvas
+            context.fillStyle = 'rgba(0, 0, 0, 0)';
+            context.fillRect(0, 0, width, height);
+            
+            // Draw text
+            context.font = 'bold 72px Arial';
+            context.textAlign = 'center';
+            context.textBaseline = 'middle';
+            context.fillStyle = 'white';
+            context.fillText(text, width / 2, height / 2);
+            
+            // Create texture from canvas
+            const texture = new THREE.CanvasTexture(canvas);
+            texture.needsUpdate = true;
+            return texture;
+        }
+        
+        // Create default name texture
+        let nameTexture = createTextTexture('TURBO');
+        
+        // Lights
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+        
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        directionalLight.position.set(5, 10, 7.5);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.mapSize.width = 1024;
+        directionalLight.shadow.mapSize.height = 1024;
+        scene.add(directionalLight);
+        
+        // Ground
+        const groundGeometry = new THREE.PlaneGeometry(50, 50);
+        const groundMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x1E824C,
+            roughness: 0.8,
+            metalness: 0.2
+        });
+        const ground = new THREE.Mesh(groundGeometry, groundMaterial);
+        ground.rotation.x = -Math.PI / 2;
+        ground.receiveShadow = true;
+        scene.add(ground);
+        
+        // Road
+        const roadGeometry = new THREE.PlaneGeometry(6, 50);
+        const roadMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0x333333,
+            roughness: 0.9
+        });
+        const road = new THREE.Mesh(roadGeometry, roadMaterial);
+        road.rotation.x = -Math.PI / 2;
+        road.position.y = 0.01; // Slightly above ground to prevent z-fighting
+        road.receiveShadow = true;
+        scene.add(road);
+        
+        // Road markings
+        const markingsGeometry = new THREE.PlaneGeometry(0.2, 2);
+        const markingsMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+        
+        for (let i = -25; i < 25; i += 5) {
+            const marking = new THREE.Mesh(markingsGeometry, markingsMaterial);
+            marking.rotation.x = -Math.PI / 2;
+            marking.position.set(0, 0.02, i); // Slightly above road
+            scene.add(marking);
+        }
+        
+        // Create car
+        const carGroup = new THREE.Group();
+        
+        // Car body
+        const carBodyGeometry = new THREE.BoxGeometry(2, 1, 4);
+        const carBodyMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xFF0000,
+            roughness: 0.2,
+            metalness: 0.8
+        });
+        const carBody = new THREE.Mesh(carBodyGeometry, carBodyMaterial);
+        carBody.position.y = 0.8;
+        carBody.castShadow = true;
+        carGroup.add(carBody);
+        
+        // Car name plates (on both sides)
+        const namePlateGeometry = new THREE.PlaneGeometry(1.8, 0.5);
+        const namePlateMaterial = new THREE.MeshBasicMaterial({ 
+            map: nameTexture,
+            transparent: true,
+            side: THREE.DoubleSide
+        });
+        
+        // Left side name plate
+        const leftNamePlate = new THREE.Mesh(namePlateGeometry, namePlateMaterial);
+        leftNamePlate.position.set(1.01, 1.0, 0);
+        leftNamePlate.rotation.y = Math.PI / 2;
+        carGroup.add(leftNamePlate);
+        
+        // Right side name plate
+        const rightNamePlate = new THREE.Mesh(namePlateGeometry, namePlateMaterial);
+        rightNamePlate.position.set(-1.01, 1.0, 0);
+        rightNamePlate.rotation.y = -Math.PI / 2;
+        carGroup.add(rightNamePlate);
+        
+        // Car top
+        const carTopGeometry = new THREE.BoxGeometry(1.8, 0.8, 2);
+        const carTopMaterial = new THREE.MeshStandardMaterial({ 
+            color: 0xCC0000,
+            roughness: 0.2,
+            metalness: 0.8
+        });
+        const carTop = new THREE.Mesh(carTopGeometry, carTopMaterial);
+        carTop.position.y = 1.7;
+        carTop.position.z = -0.5;
+        carTop.castShadow = true;
+        carGroup.add(carTop);
+        
+        // Create wheels
+        function createWheel() {
+            const wheelGeometry = new THREE.CylinderGeometry(0.4, 0.4, 0.3, 16);
+            const wheelMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x333333,
+                roughness: 0.9,
+                metalness: 0.2
+            });
+            const wheel = new THREE.Mesh(wheelGeometry, wheelMaterial);
+            wheel.rotation.z = Math.PI / 2;
+            wheel.castShadow = true;
+            return wheel;
+        }
+        
+        const frontLeftWheel = createWheel();
+        frontLeftWheel.position.set(1.1, 0.4, 1.2);
+        carGroup.add(frontLeftWheel);
+        
+        const frontRightWheel = createWheel();
+        frontRightWheel.position.set(-1.1, 0.4, 1.2);
+        carGroup.add(frontRightWheel);
+        
+        const backLeftWheel = createWheel();
+        backLeftWheel.position.set(1.1, 0.4, -1.2);
+        carGroup.add(backLeftWheel);
+        
+        const backRightWheel = createWheel();
+        backRightWheel.position.set(-1.1, 0.4, -1.2);
+        carGroup.add(backRightWheel);
+        
+        // Headlights
+        const headlightGeometry = new THREE.CircleGeometry(0.2, 16);
+        const headlightMaterial = new THREE.MeshBasicMaterial({ color: 0xFFFFCC });
+        
+        const leftHeadlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+        leftHeadlight.position.set(0.8, 0.8, 2);
+        leftHeadlight.rotation.y = Math.PI;
+        carGroup.add(leftHeadlight);
+        
+        const rightHeadlight = new THREE.Mesh(headlightGeometry, headlightMaterial);
+        rightHeadlight.position.set(-0.8, 0.8, 2);
+        rightHeadlight.rotation.y = Math.PI;
+        carGroup.add(rightHeadlight);
+        
+        // Add car to scene
+        scene.add(carGroup);
+        
+        // Add some trees for environment
+        function createTree(x, z) {
+            const treeGroup = new THREE.Group();
+            
+            // Tree trunk
+            const trunkGeometry = new THREE.CylinderGeometry(0.2, 0.2, 1.5, 8);
+            const trunkMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x8B4513,
+                roughness: 0.9
+            });
+            const trunk = new THREE.Mesh(trunkGeometry, trunkMaterial);
+            trunk.position.y = 0.75;
+            trunk.castShadow = true;
+            treeGroup.add(trunk);
+            
+            // Tree leaves
+            const leavesGeometry = new THREE.ConeGeometry(1, 2, 8);
+            const leavesMaterial = new THREE.MeshStandardMaterial({ 
+                color: 0x228B22,
+                roughness: 0.8
+            });
+            const leaves = new THREE.Mesh(leavesGeometry, leavesMaterial);
+            leaves.position.y = 2.5;
+            leaves.castShadow = true;
+            treeGroup.add(leaves);
+            
+            treeGroup.position.set(x, 0, z);
+            scene.add(treeGroup);
+        }
+        
+        // Create some trees on both sides of the road
+        for (let i = -20; i <= 20; i += 8) {
+            createTree(-6, i);  // Left side
+            createTree(6, i);   // Right side
+        }
+        
+        // Movement variables
+        const carSpeed = 0.1;
+        const rotationSpeed = 0.04;
+        let moveForward = false;
+        let moveBackward = false;
+        let turnLeft = false;
+        let turnRight = false;
+        
+        // Handle keyboard controls
+        document.addEventListener('keydown', (event) => {
+            switch (event.key.toLowerCase()) {
+                case 'w': moveForward = true; break;
+                case 's': moveBackward = true; break;
+                case 'a': turnLeft = true; break;
+                case 'd': turnRight = true; break;
+            }
+        });
+        
+        document.addEventListener('keyup', (event) => {
+            switch (event.key.toLowerCase()) {
+                case 'w': moveForward = false; break;
+                case 's': moveBackward = false; break;
+                case 'a': turnLeft = false; break;
+                case 'd': turnRight = false; break;
+                case 'r': resetCarPosition(); break;
+            }
+        });
+        
+        // Touch controls
+        document.getElementById('forward').addEventListener('mousedown', () => moveForward = true);
+        document.getElementById('forward').addEventListener('mouseup', () => moveForward = false);
+        document.getElementById('forward').addEventListener('touchstart', () => moveForward = true);
+        document.getElementById('forward').addEventListener('touchend', () => moveForward = false);
+        
+        document.getElementById('backward').addEventListener('mousedown', () => moveBackward = true);
+        document.getElementById('backward').addEventListener('mouseup', () => moveBackward = false);
+        document.getElementById('backward').addEventListener('touchstart', () => moveBackward = true);
+        document.getElementById('backward').addEventListener('touchend', () => moveBackward = false);
+        
+        document.getElementById('left').addEventListener('mousedown', () => turnLeft = true);
+        document.getElementById('left').addEventListener('mouseup', () => turnLeft = false);
+        document.getElementById('left').addEventListener('touchstart', () => turnLeft = true);
+        document.getElementById('left').addEventListener('touchend', () => turnLeft = false);
+        
+        document.getElementById('right').addEventListener('mousedown', () => turnRight = true);
+        document.getElementById('right').addEventListener('mouseup', () => turnRight = false);
+        document.getElementById('right').addEventListener('touchstart', () => turnRight = true);
+        document.getElementById('right').addEventListener('touchend', () => turnRight = false);
+        
+        document.getElementById('reset').addEventListener('click', resetCarPosition);
+        
+        // Car name update handler
+        document.getElementById('updateName').addEventListener('click', updateCarName);
+        
+        function updateCarName() {
+            const nameInput = document.getElementById('carName');
+            const name = nameInput.value.trim() || 'TURBO'; // Default to TURBO if empty
+            
+            // Update texture with new name
+            nameTexture = createTextTexture(name);
+            
+            // Update materials on both name plates
+            leftNamePlate.material.map = nameTexture;
+            leftNamePlate.material.needsUpdate = true;
+            rightNamePlate.material.map = nameTexture;
+            rightNamePlate.material.needsUpdate = true;
+        }
+        
+        function resetCarPosition() {
+            carGroup.position.set(0, 0, 0);
+            carGroup.rotation.y = 0;
+        }
+        
+        // Animation loop
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            // Update car position and rotation
+            if (moveForward) {
+                carGroup.position.x += Math.sin(carGroup.rotation.y) * carSpeed;
+                carGroup.position.z += Math.cos(carGroup.rotation.y) * carSpeed;
+                
+                // Rotate wheels
+                frontLeftWheel.rotation.x += 0.1;
+                frontRightWheel.rotation.x += 0.1;
+                backLeftWheel.rotation.x += 0.1;
+                backRightWheel.rotation.x += 0.1;
+            }
+            
+            if (moveBackward) {
+                carGroup.position.x -= Math.sin(carGroup.rotation.y) * carSpeed;
+                carGroup.position.z -= Math.cos(carGroup.rotation.y) * carSpeed;
+                
+                // Rotate wheels in opposite direction
+                frontLeftWheel.rotation.x -= 0.1;
+                frontRightWheel.rotation.x -= 0.1;
+                backLeftWheel.rotation.x -= 0.1;
+                backRightWheel.rotation.x -= 0.1;
+            }
+            
+            if (turnLeft) {
+                carGroup.rotation.y += rotationSpeed;
+            }
+            
+            if (turnRight) {
+                carGroup.rotation.y -= rotationSpeed;
+            }
+            
+            // Keep the camera following the car
+            camera.position.x = carGroup.position.x;
+            camera.position.z = carGroup.position.z - 10;
+            camera.lookAt(carGroup.position);
+            
+            renderer.render(scene, camera);
+        }
+        
+        // Handle window resize
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        animate();
+    </script>
+</body>
+</html>
